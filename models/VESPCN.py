@@ -55,7 +55,7 @@ class MotionCompensator(nn.Module):
 
         x_mc_c = F.grid_sample(
             x_t1, torch.clamp(grid - coarse_flow.permute(0, 2, 3, 1), -1, 1),
-            align_corners=True, mode='bilinear'
+            align_corners=False, mode='bilinear'
         )
 
         fine_flow = self.fine_flow(torch.cat([xs, coarse_flow, x_mc_c], dim=1))
@@ -65,7 +65,7 @@ class MotionCompensator(nn.Module):
         flow = coarse_flow + fine_flow
         x_mc = F.grid_sample(
             x_t1, torch.clamp(grid - flow.permute(0, 2, 3, 1), -1, 1),
-            align_corners=True, mode='bilinear'
+            align_corners=False, mode='bilinear'
         )
         return x_mc, flow
 
@@ -106,7 +106,7 @@ class VESPCN(nn.Module):
 
         self.initialize()
 
-    def forward(self, xs: torch.Tensor):
+    def forward(self, xs: torch.Tensor) -> torch.Tensor | Sequence[torch.Tensor]:
         x_tm1, x_t, x_tp1 = xs.chunk(3, dim=1)
         x_tm1_mc, flow_tm1 = self.motion_compensator(x_t, x_tm1)
         x_tp1_mc, flow_tp1 = self.motion_compensator(x_t, x_tp1)
