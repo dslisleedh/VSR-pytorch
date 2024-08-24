@@ -45,7 +45,7 @@ class MotionCompensator(nn.Module):
         grid = torch.stack(torch.meshgrid(
             torch.linspace(-1, 1, h),
             torch.linspace(-1, 1, w)
-        ), dim=-1).unsqueeze(0).to(x_t1.device)
+        ), dim=-1).unsqueeze(0).to(x_t1.device).flip(-1)
 
         xs = torch.cat([x_t, x_t1], dim=1)
 
@@ -104,6 +104,8 @@ class VESPCN(nn.Module):
         self.motion_compensator = MotionCompensator()
         self.espcn = ESPCN(n_feat, n_layers, scale)
 
+        self.initialize()
+
     def forward(self, xs: torch.Tensor):
         x_tm1, x_t, x_tp1 = xs.chunk(3, dim=1)
         x_tm1_mc, flow_tm1 = self.motion_compensator(x_t, x_tm1)
@@ -116,3 +118,16 @@ class VESPCN(nn.Module):
             return x_sr, flow_tm1, flow_tp1
         else:
             return x_sr
+
+    def initialize(self):
+        for w in self.espcn.parameters():
+            if w.dim() > 1:
+                nn.init.orthogonal_(w, gain=2**0.5)
+            else:
+                nn.init.zeros_(w)
+
+        for w in self.motion_compensator.parameters():
+            if w.dim() > 1:
+                nn.init.orthogonal_(w, gain=2**0.5)
+            else:
+                nn.init.zeros_(w)
