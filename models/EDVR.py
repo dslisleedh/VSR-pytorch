@@ -7,9 +7,24 @@ from torchvision.ops import deform_conv2d
 from einops import rearrange
 
 from functools import partial
+from typing import Sequence
 
 
 upsample_only_spatial = partial(F.interpolate, scale_factor=(1, 2, 2), mode='trilinear', align_corners=False)
+
+
+class ResidualBlockNoBN(nn.Module):
+    def __init__(self, num_feat: int = 64, res_scale: float = 1.0):
+        super().__init__()
+        self.res_scale = res_scale
+        self.conv1 = nn.Conv2d(num_feat, num_feat, 3, 1, 1, bias=True)
+        self.conv2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1, bias=True)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        identity = x
+        out = self.conv2(self.relu(self.conv1(x)))
+        return identity + out * self.res_scale
 
 
 class ResidualBlockNoBN3D(nn.Module):
@@ -78,7 +93,7 @@ class DeformableConv2dPack(nn.Module):
             'bias', nn.Parameter(torch.zeros(c_base))
         )
         self.offset_mask_conv = nn.Conv2d(
-            c_base, 3 * deformable_groups * 3 * 3, 3, 1, 1  # offset + mask * groups * kh * kw
+            c_base, 3 * deformable_groups * 3 * 3, 3, 1, 1  # (offset + mask) * groups * kh * kw
         )
         self.init_weights()
 
@@ -96,7 +111,7 @@ class DeformableConv2dPack(nn.Module):
         o1, o2, mask = torch.chunk(out, 3, dim=1)
         offset = torch.cat((o1, o2), dim=1)
         mask = torch.sigmoid(mask)
-        return deform_conv2d(x, offset, self.weight, padding=(1, 1), mask=mask)
+        return deform_conv2d(x, offset, self.weight, self.bias, padding=(1, 1), mask=mask)
 
     def extra_repr(self):
         return f"(weight): {self.weight.shape} \n(bias): {self.bias.shape}"
@@ -105,6 +120,93 @@ class DeformableConv2dPack(nn.Module):
 class PCDAlignment(nn.Module):
     def __init__(self, c_base: int, n_groups: int):
         super().__init__()
+
+        self.offset_l3 = nn.Sequential(
+            nn.Conv2d(c_base * 2, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(c_base, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+        self.dcn_l3 = DeformableConv2dPack(c_base, n_groups)
+
+        self.offset_l2_proj = nn.Sequential(
+            nn.Conv2d(c_base * 2, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+        self.offset_l2_agg = nn.Sequential(
+            nn.Conv2d(c_base * 2, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(c_base, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+        self.dcn_l2 = DeformableConv2dPack(c_base, n_groups)
+        self.feat_l2 = nn.Sequential(
+            nn.Conv2d(c_base * 2, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+
+        self.offset_l1_proj = nn.Sequential(
+            nn.Conv2d(c_base * 2, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+        self.offset_l1_agg = nn.Sequential(
+            nn.Conv2d(c_base * 2, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(c_base, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+        self.dcn_l1 = DeformableConv2dPack(c_base, n_groups)
+        self.feat_l1 = nn.Conv2d(c_base * 2, c_base, 3, 1, 1)
+
+        self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False)
+
+        self.cas_offset = nn.Sequential(
+            nn.Conv2d(c_base * 2, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(c_base, c_base, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+        self.cas_dcn = DeformableConv2dPack(c_base, n_groups)
+        self.cas_dcn_act = nn.LeakyReLU(0.1, inplace=True)
+
+    def forward(
+            self, x_t_l1: torch.Tensor, x_t_l2: torch.Tensor, x_t_l3: torch.Tensor,
+            x_nearby_l1: torch.Tensor, x_nearby_l2: torch.Tensor, x_nearby_l3: torch.Tensor
+    ) -> torch.Tensor:
+        # L3
+        offset = self.offset_l3(
+            torch.cat([x_nearby_l3, x_t_l3], dim=1)
+        )
+        feat = self.dcn_l3(x_nearby_l3, offset)
+        upsampled_offset = self.up(offset) * 2
+        upsampled_feat = self.up(feat)
+
+        # L2
+        offset = self.offset_l2_proj(
+            torch.cat([x_nearby_l2, x_t_l2], dim=1)
+        )
+        offset = self.offset_l2_agg(
+            torch.cat([offset, upsampled_offset], dim=1)
+        )
+        feat = self.dcn_l2(x_nearby_l2, offset)
+        feat = self.feat_l2(torch.cat([feat, upsampled_feat], dim=1))
+        upsampled_offset = self.up(offset) * 2
+        upsampled_feat = self.up(feat)
+
+        # L1
+        offset = self.offset_l1_proj(
+            torch.cat([x_nearby_l1, x_t_l1], dim=1)
+        )
+        offset = self.offset_l1_agg(
+            torch.cat([offset, upsampled_offset], dim=1)
+        )
+        feat = self.dcn_l1(x_nearby_l1, offset)
+        feat = self.feat_l1(torch.cat([feat, upsampled_feat], dim=1))
+
+        # Cascading
+        offset = self.cas_offset(torch.cat([feat, x_t_l1], dim=1))
+        feat = self.cas_dcn_act(self.cas_dcn(feat, offset))
+        return feat
 
 
 class TSAFusion(nn.Module):
@@ -201,9 +303,80 @@ class TSAFusion(nn.Module):
         return feat
 
 
-class Reconstruction(nn.Module):
-    ...
-
-
 class EDVR(nn.Module):
-    ...
+    def __init__(
+            self, c_base: int = 64, n_frames: int = 5, n_deform_groups: int = 8,
+            n_extra_blocks: int = 5, n_recon_blocks: int = 10
+    ):
+        super().__init__()
+        self.pre_deblur = nn.Sequential(
+            PreDeblur(c_base),
+            nn.Conv3d(c_base, c_base, 1, 1, 0)
+        )
+        self.to_l1 = nn.Sequential(*[
+            ResidualBlockNoBN3D(c_base) for _ in range(n_extra_blocks)
+        ])
+        self.to_l2 = nn.Sequential(
+            nn.Conv3d(c_base, c_base, (1, 3, 3), (1, 2, 2), (0, 1, 1)),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv3d(c_base, c_base, (1, 3, 3), 1, (0, 1, 1)),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+        self.to_l3 = nn.Sequential(
+            nn.Conv3d(c_base, c_base, (1, 3, 3), (1, 2, 2), (0, 1, 1)),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv3d(c_base, c_base, (1, 3, 3), 1, (0, 1, 1)),
+            nn.LeakyReLU(0.1, inplace=True),
+        )
+
+        self.pcd_alignment = PCDAlignment(c_base, n_deform_groups)
+
+        self.tsa_fusion = TSAFusion(c_base, n_frames)
+
+        self.recon = nn.Sequential(*[
+            ResidualBlockNoBN(c_base) for _ in range(n_recon_blocks)
+        ])
+        self.upsample = nn.Sequential(
+            nn.Conv2d(c_base, c_base * 4, 3, 1, 1),
+            nn.PixelShuffle(2),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(c_base, 64 * 4, 3, 1, 1),
+            nn.PixelShuffle(2),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(64, 64, 3, 1, 1),
+            nn.LeakyReLU(0.1, inplace=True),
+            nn.Conv2d(64, 3, 3, 1, 1),
+        )
+
+    def forward(self, xs: torch.Tensor) -> torch.Tensor:
+        """
+        :param xs: [B, 3, 5, T, H, W]
+        :return: [B, 3, 4H, 4W]
+        """
+        x_t = xs[:, :, 2]
+        t = xs.size(2)
+
+        # Generate pyramid features
+        feat_l1 = self.pre_deblur(xs)
+        feat_l1 = self.to_l1(feat_l1)
+        feat_l2 = self.to_l2(feat_l1)
+        feat_l3 = self.to_l3(feat_l2)
+
+        # PCD alignment
+        feat = []
+        for i in range(t):
+            feat.append(
+                self.pcd_alignment(
+                    feat_l1[:, :, 2], feat_l2[:, :, 2], feat_l3[:, :, 2],
+                    feat_l1[:, :, i], feat_l2[:, :, i], feat_l3[:, :, i]
+                )
+            )
+        feat = torch.stack(feat, dim=2)  # B C T H W
+
+        # TSA fusion
+        feat = self.tsa_fusion(feat)
+
+        # Reconstruction and upsample
+        feat = self.recon(feat)
+        out = self.upsample(feat) + F.interpolate(x_t, scale_factor=4, mode='bilinear', align_corners=False)
+        return out
