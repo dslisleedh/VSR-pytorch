@@ -34,17 +34,27 @@ class NonLocalBlock(nn.Module):
 
 
 class ProgressiveFusionRB(nn.Module):
-    def __init__(self, c_base: int, n_frames: int):
+    def __init__(self, c_base: int, n_frames: int, parameter_sharing: bool = False):
         super(ProgressiveFusionRB, self).__init__()
         self.n_frames = n_frames
-        self.proj_3 = nn.Conv3d(
-            c_base, c_base, kernel_size=(1, 3, 3), stride=1, padding=(0, 1, 1)
-        )
+        self.parameters_sharing = parameter_sharing
+        if parameter_sharing:
+            self.proj_3 = nn.Conv3d(
+                c_base, c_base, kernel_size=(1, 3, 3), stride=1, padding=(0, 1, 1)
+            )
+            self.agg_3 = nn.Conv3d(
+                c_base * 2, c_base, kernel_size=(1, 3, 3), stride=1, padding=(0, 1, 1)
+            )
+        else:
+            self.proj_3 = nn.Conv2d(
+                c_base * n_frames, c_base * n_frames, kernel_size=3, stride=1, padding=1, groups=n_frames
+            )
+            self.agg_3 = nn.Conv2d(
+                c_base * n_frames * 2, c_base, kernel_size=3, stride=1, padding=1, groups=n_frames
+            )
+
         self.dist_1 = nn.Conv2d(
             c_base * n_frames, c_base, kernel_size=1, stride=1, padding=0
-        )
-        self.agg_3 = nn.Conv3d(
-            c_base * 2, c_base, kernel_size=(1, 3, 3), stride=1, padding=(0, 1, 1)
         )
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
@@ -52,11 +62,18 @@ class ProgressiveFusionRB(nn.Module):
         :param xs: (B, C, T, H, W)
         :return: (B, C, T, H, W)
         """
-        feat = self.proj_3(xs)
-        feat = rearrange(feat, "b c t h w -> b (c t) h w")
+        if self.parameters_sharing:
+            feat = self.proj_3(xs)
+            feat = rearrange(feat, "b c t h w -> b (c t) h w")
+        else:
+            feat = self.proj_3(xs.flatten(1, 2))
         feat = self.dist_1(feat).unsqueeze(2).repeat(1, 1, self.n_frames, 1, 1)  # B, C, T, H, W
         feat = torch.cat([xs, feat], dim=1)  # B, C*2, T, H, W
-        feat = self.agg_3(feat)  # B, C, T, H, W
+        if self.parameters_sharing:
+            feat = self.agg_3(feat)
+        else:
+            feat = self.agg_3(feat.flatten(1, 2))
+            feat = rearrange(feat, 'b (c t) h w -> b c t h w', t=self.n_frames)
         return xs + feat
 
 
