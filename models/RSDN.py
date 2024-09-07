@@ -143,4 +143,3 @@ class RSDN(nn.Module):
         }
 
         return rgb_hat_up, res_reference_dict
-    
