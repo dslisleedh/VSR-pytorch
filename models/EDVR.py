@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torchvision.ops import deform_conv2d
-
 from einops import rearrange
 
 from functools import partial
 from typing import Sequence
+
+from layers.deformable_conv_v2 import DeformableConv2dPack
 
 
 upsample_only_spatial = partial(F.interpolate, scale_factor=(1, 2, 2), mode='trilinear', align_corners=False)
@@ -81,40 +81,6 @@ class PreDeblur(nn.Module):
         for m in self.refine_l1_aft_add:
             feat_l1 = m(feat_l1)
         return feat_l1
-
-
-class DeformableConv2dPack(nn.Module):
-    def __init__(self, c_base: int, deformable_groups: int):
-        super().__init__()
-        self.register_parameter(
-            "weight", nn.Parameter(torch.randn(c_base, c_base, 3, 3) * 0.02)
-        )
-        self.register_parameter(
-            'bias', nn.Parameter(torch.zeros(c_base))
-        )
-        self.offset_mask_conv = nn.Conv2d(
-            c_base, 3 * deformable_groups * 3 * 3, 3, 1, 1  # (offset + mask) * groups * kh * kw
-        )
-        self.init_weights()
-
-    def init_weights(self):
-        self.offset_mask_conv.weight.data.zero_()
-        self.offset_mask_conv.bias.data.zero_()
-
-    def forward(self, x: torch.Tensor, feat: torch.Tensor) -> torch.Tensor:
-        """
-        :param x: Tensor of shape (B, C, H, W)
-        :param feat: Tensor of shape (B, C, H, W)
-        :return: Tensor of shape (B, C, H, W)
-        """
-        out = self.offset_mask_conv(feat)
-        o1, o2, mask = torch.chunk(out, 3, dim=1)
-        offset = torch.cat((o1, o2), dim=1)
-        mask = torch.sigmoid(mask)
-        return deform_conv2d(x, offset, self.weight, self.bias, padding=(1, 1), mask=mask)
-
-    def extra_repr(self):
-        return f"(weight): {self.weight.shape} \n(bias): {self.bias.shape}"
 
 
 class PCDAlignment(nn.Module):
