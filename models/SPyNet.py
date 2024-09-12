@@ -9,7 +9,7 @@ import math
 
 class ConvNets(nn.Sequential):
     def __init__(self):
-        super().__init(
+        super().__init__(
             nn.Conv2d(8, 32, 7, 1, 3),  # Ref(RGB) + Sup(RGB) + Flow(UV)
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 64, 7, 1, 3),
