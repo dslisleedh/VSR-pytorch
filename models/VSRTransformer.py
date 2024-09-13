@@ -6,6 +6,7 @@ from einops import rearrange
 
 from models.SPyNet import SPyNet  # For Flow estimation
 from layers.positional_encoding import PositionalEncodingPermute3D
+from utils.warp import flow_warp
 
 
 class LayerNorm3d(nn.Module):
@@ -102,17 +103,6 @@ class ResBlocksInputConv(nn.Sequential):
             *[ResBlock(n_feats) for _ in range(n_blocks)]
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return super().forward(x)
-
-
-def warp(sample: torch.Tensor, flow: torch.Tensor):
-    h, w = flow.size(2), flow.size(3)
-    flow[:, 0] = flow[:, 0] / (w / 2)
-    flow[:, 1] = flow[:, 1] / (h / 2)
-
-    return F.grid_sample(sample, flow.permute(0, 2, 3, 1), mode='bilinear', align_corners=False)
-
 
 class BidirectionalOpticalFlowFFN(nn.Module):
     def __init__(self, n_feats: int, n_blocks: int):
@@ -134,7 +124,7 @@ class BidirectionalOpticalFlowFFN(nn.Module):
         x_backward = rearrange(
             torch.cat([x[:, :, 1:], x[:, :, -1:]], dim=2), 'b c t h w -> (b t) c h w'
         )  # [BxT, C, H, W]
-        x_backward = warp(x_backward, flows[1])
+        x_backward = flow_warp(x_backward, flows[1])
         x_backward = torch.cat([lrs, x_backward], dim=1)
         x_backward = self.backward_resblocks(x_backward)
         x_backward = rearrange(x_backward, '(b t) c h w -> b c t h w', b=b, t=t)
@@ -142,7 +132,7 @@ class BidirectionalOpticalFlowFFN(nn.Module):
         x_forward = rearrange(
             torch.cat([x[:, :, :-1], x[:, :, 0:1]], dim=2), 'b c t h w -> (b t) c h w'
         )
-        x_forward = warp(x_forward, flows[0])
+        x_forward = flow_warp(x_forward, flows[0])
         x_forward = torch.cat([lrs, x_forward], dim=1)
         x_forward = self.forward_resblocks(x_forward)
         x_forward = rearrange(x_forward, '(b t) c h w -> b c t h w', b=b, t=t)

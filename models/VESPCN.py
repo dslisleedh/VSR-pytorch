@@ -6,6 +6,8 @@ from einops import rearrange
 
 from typing import Sequence
 
+from utils.warp import flow_warp
+
 
 class MotionCompensator(nn.Module):
     def __init__(self):
@@ -41,32 +43,14 @@ class MotionCompensator(nn.Module):
             x_mc: [B, 1, H, W], motion compensated frame
             flow: [B, 2, H, W], flow
         """
-        h, w = x_t1.shape[-2:]
-        grid = torch.stack(torch.meshgrid(
-            torch.linspace(-1, 1, h),
-            torch.linspace(-1, 1, w)
-        ), dim=-1).unsqueeze(0).to(x_t1.device).flip(-1)
-
         xs = torch.cat([x_t, x_t1], dim=1)
 
         coarse_flow = self.coarse_flow(xs)
-        coarse_flow[:, 0] = coarse_flow[:, 0] / w
-        coarse_flow[:, 1] = coarse_flow[:, 1] / h
-
-        x_mc_c = F.grid_sample(
-            x_t1, torch.clamp(grid - coarse_flow.permute(0, 2, 3, 1), -1, 1),
-            align_corners=False, mode='bilinear'
-        )
+        x_mc_c = flow_warp(x_t1, coarse_flow)
 
         fine_flow = self.fine_flow(torch.cat([xs, coarse_flow, x_mc_c], dim=1))
-        fine_flow[:, 0] = fine_flow[:, 0] / w
-        fine_flow[:, 1] = fine_flow[:, 1] / h
-
         flow = coarse_flow + fine_flow
-        x_mc = F.grid_sample(
-            x_t1, torch.clamp(grid - flow.permute(0, 2, 3, 1), -1, 1),
-            align_corners=False, mode='bilinear'
-        )
+        x_mc = flow_warp(x_t1, flow)
         return x_mc, flow
 
 

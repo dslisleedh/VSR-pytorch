@@ -15,14 +15,14 @@ class DeformableConv2d(nn.Module):
         self.register_parameter(
             'bias', nn.Parameter(torch.zeros(c_base))
         )
-        self.offset_mask_conv = nn.Conv2d(
+        self.offset_conv = nn.Conv2d(
             c_base, 2 * deformable_groups * 3 * 3, 3, 1, 1  # offset * groups * kh * kw
         )
         self.init_weights()
 
     def init_weights(self):
-        self.offset_mask_conv.weight.data.zero_()
-        self.offset_mask_conv.bias.data.zero_()
+        self.offset_conv.weight.data.zero_()
+        self.offset_conv.bias.data.zero_()
 
     def forward(self, feat: torch.Tensor, reference: torch.Tensor | None = None) -> torch.Tensor:
         """
@@ -30,7 +30,7 @@ class DeformableConv2d(nn.Module):
         :param reference: [B, C, H, W] or None
         :return: [B, C, H, W]
         """
-        offset = self.offset_mask_conv(reference) if reference is not None else self.offset_mask_conv(feat)
+        offset = self.offset_conv(reference) if reference is not None else self.offset_conv(feat)
         return deform_conv2d(feat, offset, self.weight, self.bias, padding=(1, 1))
 
     def extra_repr(self):

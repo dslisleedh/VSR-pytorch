@@ -6,6 +6,8 @@ from einops import rearrange
 
 import math
 
+from utils.warp import flow_warp
+
 
 class ConvNets(nn.Sequential):
     def __init__(self):
@@ -39,19 +41,6 @@ class SPyNet(nn.Module):
             sample, scale_factor=2, mode='bilinear', align_corners=False
         ) * 2  # *2 for enhance magnitude
 
-    @staticmethod
-    def w(sample, flow):
-        """
-        :param sample: B, 3, H, W
-        :param flow: B, 2, H, W
-        :return: B, 3, H, W
-        """
-        h, w = flow.size(2), flow.size(3)
-        flow[:, 0] = flow[:, 0] / (w / 2)  # we use align_corners=False
-        flow[:, 1] = flow[:, 1] / (h / 2)
-
-        return F.grid_sample(sample, flow.permute(0, 2, 3, 1), mode='bilinear', align_corners=False)
-
     def forward(self, ref, sup):
         base_size = 2 ** (self.n_levels - 1)
         h, w = ref.size(2), ref.size(3)
@@ -77,7 +66,7 @@ class SPyNet(nn.Module):
         i = 0
         for ref_k, sup_k, g_k in zip(ref_pyramid, sup_pyramid, self.Gs):
             if i > 0:
-                sup_k = self.w(sup_k, flow)
+                sup_k = flow_warp(sup_k, flow)
             flow = g_k(torch.cat([ref_k, sup_k, flow], dim=1)) + flow
             flow = self.u(flow)
 
