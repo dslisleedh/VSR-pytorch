@@ -100,7 +100,7 @@ class BasicVSR(nn.Module):
         for i in range(T-1, -1, -1):
             lr = lrs[:, :, i]
             if i != T-1:
-                flow = flow_forward[:, :, i]
+                flow = flow_backward[:, :, i]
                 h = flow_warp(h, flow)
             h = self.backward_path(torch.cat([h, lr], dim=1))
             backwards.append(h)
@@ -111,9 +111,9 @@ class BasicVSR(nn.Module):
         for i in range(T):
             lr = lrs[:, :, i]
             if i != 0:
-                flow = flow_backward[:, :, i-1]
+                flow = flow_forward[:, :, i-1]
                 h = flow_warp(h, flow)
-            h = self.backward_path(torch.cat([h, lr], dim=1))
+            h = self.forward_path(torch.cat([h, lr], dim=1))
             forwards.append(h)
 
         srs = []
