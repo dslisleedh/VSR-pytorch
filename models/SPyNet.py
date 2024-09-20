@@ -76,3 +76,31 @@ class SPyNet(nn.Module):
         flow[:, 0] = flow[:, 0] * w / w_to
         flow[:, 1] = flow[:, 1] * h / h_to
         return flow
+
+
+class BidirectionalSPyNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.snet = SPyNet()
+
+    def forward(self, lrs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        :param lrs: [B, C, T, H, W]
+        :return: [B, 2, T-1, H, W], [B, 2, T-1, H, W]
+        """
+        t = lrs.size(2)
+        x_1 = rearrange(
+            lrs[:, :, :-1], 'b c t h w -> (b t) c h w'
+        )
+        x_2 = rearrange(
+            lrs[:, :, 1:], 'b c t h w -> (b t) c h w'
+        )
+
+        flow_forward = rearrange(
+            self.snet(x_1, x_2), '(b t) uv h w -> b uv t h w', t=t-1
+        )
+        flow_backward = rearrange(
+            self.snet(x_2, x_1), '(b t) uv h w -> b uv t h w', t=t-1
+        )
+
+        return flow_forward, flow_backward

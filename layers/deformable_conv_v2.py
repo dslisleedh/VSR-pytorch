@@ -56,13 +56,13 @@ class DeformableConv2dPack(nn.Module):
         self.offset_mask_conv.weight.data.zero_()
         self.offset_mask_conv.bias.data.zero_()
 
-    def forward(self, x: torch.Tensor, feat: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, feat: torch.Tensor | None = None) -> torch.Tensor:
         """
         :param x: Tensor of shape (B, C, H, W)
         :param feat: Tensor of shape (B, C, H, W)
         :return: Tensor of shape (B, C, H, W)
         """
-        out = self.offset_mask_conv(feat)
+        out = self.offset_mask_conv(feat) if feat is not None else self.offset_mask_conv(x)
         o1, o2, mask = torch.chunk(out, 3, dim=1)
         offset = torch.cat((o1, o2), dim=1)
         mask = torch.sigmoid(mask)
