@@ -50,7 +50,7 @@ class ProgressiveFusionRB(nn.Module):
                 c_base * n_frames, c_base * n_frames, kernel_size=3, stride=1, padding=1, groups=n_frames
             )
             self.agg_3 = nn.Conv2d(
-                c_base * n_frames * 2, c_base, kernel_size=3, stride=1, padding=1, groups=n_frames
+                c_base * n_frames * 2, c_base * n_frames, kernel_size=3, stride=1, padding=1, groups=n_frames
             )
 
         self.dist_1 = nn.Conv2d(
@@ -64,16 +64,18 @@ class ProgressiveFusionRB(nn.Module):
         """
         if self.parameters_sharing:
             feat = self.proj_3(xs)
-            feat = rearrange(feat, "b c t h w -> b (c t) h w")
-        else:
-            feat = self.proj_3(xs.flatten(1, 2))
-        feat = self.dist_1(feat).unsqueeze(2).repeat(1, 1, self.n_frames, 1, 1)  # B, C, T, H, W
-        feat = torch.cat([xs, feat], dim=1)  # B, C*2, T, H, W
-        if self.parameters_sharing:
+            feat_dist = self.dist_1(
+                feat.transpose(1, 2).flatten(1, 2)
+            ).unsqueeze(2).repeat(1, 1, self.n_frames, 1, 1)  # B, C, T, H, W
+            feat = torch.cat([feat, feat_dist], dim=1)  # B, C*2, T, H, W
             feat = self.agg_3(feat)
         else:
-            feat = self.agg_3(feat.flatten(1, 2))
-            feat = rearrange(feat, 'b (c t) h w -> b c t h w', t=self.n_frames)
+            feat = self.proj_3(xs.transpose(1, 2).flatten(1, 2))  # B, T*C, H, W
+            feat_dist = self.dist_1(feat).unsqueeze(1).repeat(1, self.n_frames, 1, 1, 1)  # B, T, C, H, W
+            feat = rearrange(feat, 'b (t c) h w -> b t c h w', t=self.n_frames)
+            feat = torch.cat([feat, feat_dist], dim=2).flatten(1, 2)  # B, T*C*2, H, W
+            feat = self.agg_3(feat)
+            feat = rearrange(feat, 'b (t c) h w -> b c t h w', t=self.n_frames)
         return xs + feat
 
 
