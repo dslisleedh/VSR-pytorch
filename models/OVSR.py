@@ -113,6 +113,7 @@ class OVSR(nn.Module):
     ):
         super().__init__()
         # scaling factor(alpha) is used in loss function
+        self.c_base = c_base
         self.net_type = net_type
 
         self.net_p = NetP(c_base, n_p_blocks, upscaling_factor)
@@ -126,7 +127,7 @@ class OVSR(nn.Module):
         B, _, T, H, W = lrs.shape
 
         # precursor step
-        h_tm1 = torch.zeros(B, 64, H, W, device=lrs.device)
+        h_tm1 = torch.zeros(B, self.c_base, H, W, device=lrs.device)
         h_p = []
         sr_p = []
         lrs = F.pad(lrs, (0, 0, 0, 0, 1, 1), 'replicate')
@@ -144,7 +145,7 @@ class OVSR(nn.Module):
             h_p = h_p[::-1]
 
         # successor step
-        h_tm1 = torch.zeros(B, 64, H, W, device=lrs.device)
+        h_tm1 = torch.zeros(B, self.c_base, H, W, device=lrs.device)
         sr_s = []
         for t in range(1, T + 1):
             cur_lr = lrs[:, :, t - 1:t + 2]
